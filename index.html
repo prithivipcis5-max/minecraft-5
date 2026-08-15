@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web Craft 3D</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #87CEEB;
+            font-family: Arial, sans-serif;
+            user-select: none;
+            touch-action: none;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            pointer-events: none;
+            text-shadow: 1px 1px 1px black;
+            z-index: 5;
+        }
+        #inventory {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 8px;
+            border-radius: 8px;
+            gap: 8px;
+            z-index: 5;
+        }
+        .slot {
+            width: 45px;
+            height: 45px;
+            border: 3px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            text-shadow: 1px 1px 0px #000;
+        }
+        .slot.active {
+            border-color: #fff;
+            box-shadow: 0 0 10px #fff;
+        }
+        #ui-panels {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 5;
+        }
+        .panel-btn {
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: 1px solid #555;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            text-align: center;
+            z-index: 10;
+        }
+        /* Mobile Touch Controls */
+        .joystick-zone {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            width: 120px;
+            height: 120px;
+            background: rgba(255,255,255,0.1);
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            display: none;
+            z-index: 5;
+        }
+        .joystick-handle {
+            position: absolute;
+            top: 35px;
+            left: 35px;
+            width: 50px;
+            height: 50px;
+            background: rgba(255,255,255,0.4);
+            border-radius: 50%;
+        }
+        #mobile-actions {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            display: none;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 5;
+        }
+        .action-btn {
+            width: 60px;
+            height: 60px;
+            background: rgba(0,0,0,0.5);
+            border: 2px solid rgba(255,255,255,0.4);
+            border-radius: 50%;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+    <!-- Three.js Library -->
+    <script src="https://cloudflare.com"></script>
+</head>
+<body>
+
+    <div id="blocker">
+        <div>
+            <strong>CLICK TO PLAY</strong><br><br>
+            Desktop: WASD = Move | Space = Jump | Clicks = Interact<br>
+            Mobile: Use on-screen joystick and buttons
+        </div>
+    </div>
+
+    <div id="ui-panels">
+        <button class="panel-btn" onclick="clearSave()">Reset World</button>
+    </div>
+
+    <div id="crosshair">+</div>
+
+    <div id="inventory">
+        <div class="slot active" data-type="1" style="background-color: #557a2b;">1</div>
+        <div class="slot" data-type="2" style="background-color: #a0764c;">2</div>
+        <div class="slot" data-type="3" style="background-color: #737373;">3</div>
+        <div class="slot" data-type="4" style="background-color: #e5c158;">4</div>
+    </div>
+
+    <!-- Mobile UI Elements -->
+    <div id="joy-zone" class="joystick-zone"><div id="joy-handle" class="joystick-handle"></div></div>
+    <div id="mobile-actions">
+        <div class="action-btn" id="btn-action">BUILD</div>
+        <div class="action-btn" id="btn-jump">JUMP</div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        const container = document.getElementById('canvas-container');
+        const blocker = document.getElementById('blocker');
+        const inventorySlots = document.querySelectorAll('.slot');
+        
+        let scene, camera, renderer;
+        let activeBlockType = 1;
+        let isMobile = false;
+        
+        // Player state
+        const moveState = { forward: false, backward: false, left: false, right: false };
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+        let isGrounded = false;
+        
+        const clock = new THREE.Clock();
+        const objects = [];
+        
+        // View rotation
+        let pitch = 0, yaw = 0;
+        const mouseSensitivity = 0.002;
+        let touchStart = { x: 0, y: 0 };
+
+        // Procedural Textures
+        const blockMaterials = {
+            1: createBlockMaterial('#557a2b', '#4d6e27'), // Grass
+            2: createBlockMaterial('#86603c', '#6e4e30'), // Dirt
+            3: createBlockMaterial('#707070', '#5a5a5a'), // Stone
+            4: createBlockMaterial('#f4cc3a', '#d4af26')  // Gold
+        };
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+
+        // Mobile action mode toggle (true = build, false = break)
+        let mobileBuildMode = true;
+
+        init();
+        animate();
+
+        function init() {
+            // Detect Mobile
+            if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+                isMobile = true;
+                document.getElementById('joy-zone').style.display = 'block';
+                document.getElementById('mobile-actions').style.display = 'flex';
+                document.getElementById('crosshair').style.display = 'none';
+            }
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            scene.fog = new THREE.FogExp2(0x87CEEB, 0.03);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(16, 5, 16);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const dl = new THREE.DirectionalLight(0xffffff, 0.6);
+            dl.position.set(20, 40, 20);
+            scene.add(dl);
+
+            // Load saved map or generate fresh terrain
+            loadWorld();
+
+            setupControls();
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createBlockMaterial(mainColor, shadowColor) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 16; canvas.height = 16;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = mainColor; ctx.fillRect(0, 0, 16, 16);
+            ctx.fillStyle = shadowColor;
+            for(let i=0; i<16; i+=2) {
+                for(let j=0; j<16; j+=2) {
+                    if(Math.random() > 0.6) ctx.fillRect(i, j, 2, 2);
+                }
+            }
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.magFilter = THREE.NearestFilter;
+            texture.minFilter = THREE.NearestFilter;
+            return new THREE.MeshLambertMaterial({ map: texture });
+        }
+
+        // --- Save System Logic ---
+        function saveWorld() {
+            const blockData = objects.map(obj => ({
+                x: obj.position.x,
+                y: obj.position.y,
+                z: obj.position.z,
+                t: obj.userData.type
+            }));
+            localStorage.setItem('webcraft_save_v1', JSON.stringify(blockData));
+        }
+
+        function loadWorld() {
+            const saved = localStorage.getItem('webcraft_save_v1');
+            if (saved) {
+                const blockData = JSON.parse(saved);
+                blockData.forEach(data => {
+                    createBlock(data.x, data.y, data.z, data.t);
+                });
+            } else {
+                // Generate default world floor
+                for (let x = 0; x < 24; x++) {
+                    for (let z = 0; z < 24; z++) {
+                        createBlock(x, 0, z, 1);
+                        createBlock(x, -1, z, 3);
+                    }
+                }
+                saveWorld();
+            }
+        }
+
+        function createBlock(x, y, z, type) {
+            const block = new THREE.Mesh(geometry, blockMaterials[type]);
+            block.position.set(x, y, z);
+            block.userData = { type: type };
+            scene.add(block);
+            objects.push(block);
+        }
+
+        function clearSave() {
+            localStorage.removeItem('webcraft_save_v1');
+            window.location.reload();
+        }
+
+        // --- Core Interactions & Controls ---
+Use code with caution.function setupControls() {blocker.addEventListener('click', () => {blocker.style.display = 'none';if (!isMobile) container.requestPointerLock();});document.addEventListener('pointerlockchange', () => {if (document.pointerLockElement !== container && !isMobile) {blocker.style.display = 'flex';}});// Mouse Look (Desktop)document.addEventListener('mousemove', (e) => {if (document.pointerLockElement !== container || isMobile) return;yaw -= e.movementX * mouseSensitivity;pitch -= e.movementY * mouseSensitivity;pitch = Math.max(-Math.PI/2 + 0.05, Math.min(Math.PI/2 - 0.05, pitch));camera.quaternion.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));});// Keyboarddocument.addEventListener('keydown', (e) => {switch (e.code) {case 'KeyW': moveState.forward = true; break;case 'KeyS': moveState.backward = true; break;case 'KeyA': moveState.left = true; break;case 'KeyD': moveState.right = true; break;case 'Space': if (isGrounded) velocity.y = 7.0; break;case 'Digit1': selectSlot(0); break;case 'Digit2': selectSlot(1); break;case 'Digit3': selectSlot(2); break;case 'Digit4': selectSlot(3); break;}});document.addEventListener('keyup', (e) => {switch (e.code) {case 'KeyW': moveState.forward = false; break;case 'KeyS': moveState.backward = false; break;case 'KeyA': moveState.left = false; break;case 'KeyD': moveState.right = false; break;}});// Click Interactions (Desktop)window.addEventListener('mousedown', (e) => {if (document.pointerLockElement !== container || isMobile) return;handleRaycast(new THREE.Vector2(0,0), e.button === 2);});// Mobile Specific Touch Interactionsif (isMobile) {// Right-side screen swipe looking aroundwindow.addEventListener('touchstart', (e) => {const touch = e.touches[0];if (touch.clientX > window.innerWidth / 2) {touchStart.x = touch.clientX;touchStart.y = touch.clientY;}});window.addEventListener('touchmove', (e) => {const touch = e.touches[0];if (touch.clientX > window.innerWidth / 2) {const dx = touch.clientX - touchStart.x;const dy = touch.clientY - touchStart.y;yaw -= dx * 0.005;pitch -= dy * 0.005;pitch = Math.max(-Math.PI/2 + 0.05, Math.min(Math.PI/2 - 0.05, pitch));camera.quaternion.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));touchStart.x = touch.clientX;touchStart.y = touch.clientY;}});// Mobile Joystick Look/Moveconst joyZone = document.getElementById('joy-zone');const joyHandle = document.getElementById('joy-handle');joyZone.addEventListener('touchmove', (e) => {e.preventDefault();const touch = e.touches[0];const rect = joyZone.getBoundingClientRect();const centerX = rect.left + rect.width/2;const centerY = rect.top + rect.height/2;let dx = touch.clientX - centerX;let dy = touch.clientY - centerY;const dist = Math.min(40, Math.sqrt(dxdx + dydy));const angle = Math.atan2(dy, dx);joyHandle.style.transform = translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px);moveState.forward = dy < -15;moveState.backward = dy > 15;moveState.left = dx < -15;moveState.right = dx > 15;});joyZone.addEventListener('touchend', () => {joyHandle.style.transform = 'none';moveState.forward = moveState.backward = moveState.left = moveState.right = false;});// Tap scene to interact via screen centercontainer.addEventListener('click', () => {handleRaycast(new THREE.Vector2(0,0), mobileBuildMode);});// Action buttons configurationsconst actionBtn = document.getElementById('btn-action');actionBtn.addEventListener('click', (e) => {e.stopPropagation();mobileBuildMode = !mobileBuildMode;actionBtn.innerText = mobileBuildMode ? "BUILD" : "BREAK";actionBtn.style.background = mobileBuildMode ? "rgba(0,0,0,0.5)" : "rgba(200,0,0,0.6)";});document.getElementById('btn-jump').addEventListener('click', (e) => {e.stopPropagation();if (isGrounded) velocity.y = 7.0;});}// Inventory configuration slots click bindsinventorySlots.forEach((slot, index) => {slot.addEventListener('click', (e) => {e.stopPropagation();selectSlot(index);});});}function handleRaycast(coords, isPlacing) {const raycaster = new THREE.Raycaster();raycaster.setFromCamera(coords, camera);const intersects = raycaster.intersectObjects(objects);if (intersects.length > 0 && intersects[0].distance < 6) {const intersect = intersects[0];if (!isPlacing) {// Break blockscene.remove(intersect.object);const index = objects.indexOf(intersect.object);if (index > -1) objects.splice(index, 1);} else {// Place blockconst pos = new THREE.Vector3().copy(intersect.object.position).add(intersect.face.normal);createBlock(pos.x, pos.y, pos.z, activeBlockType);}saveWorld();}}function selectSlot(index) {inventorySlots.forEach(s => s.classList.remove('active'));inventorySlots[index].classList.add('active');activeBlockType = parseInt(inventorySlots[index].getAttribute('data-type'));}function onWindowResize() {camera.aspect = window.innerWidth / window.innerHeight;camera.updateProjectionMatrix();renderer.setSize(window.innerWidth, window.innerHeight);}function animate() {requestAnimationFrame(animate);if (blocker.style.display === 'none') {const delta = Math.min(clock.getDelta(), 0.1);velocity.x -= velocity.x * 10.0 * delta;velocity.z -= velocity.z * 10.0 * delta;velocity.y -= 9.8 * 2.2 * delta; // Gravity scale calculationdirection.z = Number(moveState.forward) - Number(moveState.backward);direction.x = Number(moveState.right) - Number(moveState.left);direction.normalize();const camDirection = new THREE.Vector3();camera.getWorldDirection(camDirection);camDirection.y = 0;camDirection.normalize();const camSideways = new THREE.Vector3(-camDirection.z, 0, camDirection.x);if (moveState.forward || moveState.backward) velocity.z += direction.z * 40.0 * delta;if (moveState.left || moveState.right) velocity.x += direction.x * 40.0 * delta;camera.position.addScaledVector(camDirection, velocity.z * delta);camera.position.addScaledVector(camSideways, velocity.x * delta);camera.position.y += velocity.y * delta;// Simple flat collision grid check boundaryif (camera.position.y < 2.5) {velocity.y = 0;camera.position.y = 2.5;isGrounded = true;} else {isGrounded = false;}}renderer.render(scene, camera);}
